@@ -168,7 +168,7 @@ def run_clang_format_diff(args, filename):
             ),
             errs,
         )
-    return make_diff(file, original, outs), errs
+    return make_diff(filename, original, outs), errs, filename
 
 
 def bold_red(s):
@@ -334,9 +334,10 @@ def main():
         pool = multiprocessing.Pool(njobs)
         it = pool.imap_unordered(
             partial(run_clang_format_diff_wrapper, args), files)
+    broken_files = []
     while True:
         try:
-            outs, errs = next(it)
+            outs, errs, filename = next(it)
         except StopIteration:
             break
         except DiffError as e:
@@ -358,9 +359,14 @@ def main():
             if outs == []:
                 continue
             if not args.quiet:
+                broken_files.append(filename)
                 print_diff(outs, use_color=colored_stdout)
             if retcode == ExitStatus.SUCCESS:
                 retcode = ExitStatus.DIFF
+    if broken_files:
+        print("The following files had formatting issues:")
+        for broken_file in broken_files:
+            print("* {}".format(broken_file))
     return retcode
 
 
