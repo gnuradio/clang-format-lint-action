@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """A wrapper script around clang-format, suitable for linting multiple files
 and to use for continuous integration.
 
@@ -11,25 +11,18 @@ A diff output is produced and a sensible exit code is returned.
 from __future__ import print_function, unicode_literals
 
 import argparse
-import codecs
 import difflib
 import fnmatch
 import io
 import errno
+from functools import partial
 import multiprocessing
 import os
 import signal
 import subprocess
+from subprocess import DEVNULL  # py3k
 import sys
 import traceback
-
-from functools import partial
-
-try:
-    from subprocess import DEVNULL  # py3k
-except ImportError:
-    DEVNULL = open(os.devnull, "wb")
-
 
 DEFAULT_EXTENSIONS = 'c,h,C,H,cpp,hpp,cc,hh,c++,h++,cxx,hxx'
 DEFAULT_CLANG_FORMAT_IGNORE = '.clang-format-ignore'
@@ -56,7 +49,7 @@ def excludes_from_file(ignore_file):
     except EnvironmentError as e:
         if e.errno != errno.ENOENT:
             raise
-    return excludes;
+    return excludes
 
 def list_files(files, recursive=False, extensions=None, exclude=None):
     if extensions is None:
@@ -113,24 +106,23 @@ class UnexpectedError(Exception):
         self.exc = exc
 
 
-def run_clang_format_diff_wrapper(args, file):
+def run_clang_format_diff_wrapper(args, filename):
     try:
-        ret = run_clang_format_diff(args, file)
-        return ret
+        return run_clang_format_diff(args, filename)
     except DiffError:
         raise
     except Exception as e:
-        raise UnexpectedError('{}: {}: {}'.format(file, e.__class__.__name__,
-                                                  e), e)
+        raise UnexpectedError(
+            '{}: {}: {}'.format(filename, e.__class__.__name__, e), e)
 
 
-def run_clang_format_diff(args, file):
+def run_clang_format_diff(args, filename):
     try:
-        with io.open(file, 'r', encoding='utf-8') as f:
+        with io.open(filename, 'r', encoding='utf-8') as f:
             original = f.readlines()
     except IOError as exc:
         raise DiffError(str(exc))
-    invocation = [args.clang_format_executable, file]
+    invocation = [args.clang_format_executable, filename]
 
     # Use of utf-8 to decode the process output.
     #
@@ -150,17 +142,13 @@ def run_clang_format_diff(args, file):
     #   > -- http://clang.llvm.org/docs/InternalsManual.html#internals-diag-translation
     #
     # It's not pretty, due to Python 2 & 3 compatibility.
-    encoding_py3 = {}
-    if sys.version_info[0] >= 3:
-        encoding_py3['encoding'] = 'utf-8'
-
     try:
         proc = subprocess.Popen(
             invocation,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,
-            **encoding_py3)
+            **{'encoding': 'utf-8'})
     except OSError as exc:
         raise DiffError(
             "Command '{}' failed to start: {}".format(
@@ -169,12 +157,6 @@ def run_clang_format_diff(args, file):
         )
     proc_stdout = proc.stdout
     proc_stderr = proc.stderr
-    if sys.version_info[0] < 3:
-        # make the pipes compatible with Python 3,
-        # reading lines should output unicode
-        encoding = 'utf-8'
-        proc_stdout = codecs.getreader(encoding)(proc_stdout)
-        proc_stderr = codecs.getreader(encoding)(proc_stderr)
     # hopefully the stderr pipe won't get full and block the process
     outs = list(proc_stdout.readlines())
     errs = list(proc_stderr.readlines())
@@ -222,10 +204,7 @@ def colorize(diff_lines):
 def print_diff(diff_lines, use_color):
     if use_color:
         diff_lines = colorize(diff_lines)
-    if sys.version_info[0] < 3:
-        sys.stdout.writelines((l.encode('utf-8') for l in diff_lines))
-    else:
-        sys.stdout.writelines(diff_lines)
+    sys.stdout.writelines(diff_lines)
 
 
 def print_trouble(prog, message, use_colors):
@@ -235,7 +214,10 @@ def print_trouble(prog, message, use_colors):
     print("{}: {} {}".format(prog, error_text, message), file=sys.stderr)
 
 
-def main():
+def parse_args():
+    """
+    Parse command line arguments
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '--clang-format-executable',
@@ -278,9 +260,22 @@ def main():
         default=[],
         help='exclude paths matching the given glob-like pattern(s)'
         ' from recursive search')
+    return parser.parse_args(), parser.prog
 
-    args = parser.parse_args()
+def get_color_mode(args):
+    """
+    Return a pair of bools: (colored_stdout, colored_stderr)
+    """
+    if args.color == 'always':
+        return True, True
+    if args.color == 'auto':
+        return sys.stdout.isatty(), sys.stderr.isatty()
+    return False, False
 
+def main():
+    """
+    Go, go, go!
+    """
     # use default signal handling, like diff return SIGINT value on ^C
     # https://bugs.python.org/issue14229#msg156446
     signal.signal(signal.SIGINT, signal.SIG_DFL)
@@ -292,24 +287,18 @@ def main():
     else:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
-    colored_stdout = False
-    colored_stderr = False
-    if args.color == 'always':
-        colored_stdout = True
-        colored_stderr = True
-    elif args.color == 'auto':
-        colored_stdout = sys.stdout.isatty()
-        colored_stderr = sys.stderr.isatty()
+    args, prog = parse_args()
+    colored_stdout, colored_stderr = get_color_mode(args)
 
     version_invocation = [args.clang_format_executable, str("--version")]
     try:
         subprocess.check_call(version_invocation, stdout=DEVNULL)
     except subprocess.CalledProcessError as e:
-        print_trouble(parser.prog, str(e), use_colors=colored_stderr)
+        print_trouble(prog, str(e), use_colors=colored_stderr)
         return ExitStatus.TROUBLE
     except OSError as e:
         print_trouble(
-            parser.prog,
+            prog,
             "Command '{}' failed to start: {}".format(
                 subprocess.list2cmdline(version_invocation), e
             ),
@@ -351,11 +340,11 @@ def main():
         except StopIteration:
             break
         except DiffError as e:
-            print_trouble(parser.prog, str(e), use_colors=colored_stderr)
+            print_trouble(prog, str(e), use_colors=colored_stderr)
             retcode = ExitStatus.TROUBLE
             sys.stderr.writelines(e.errs)
         except UnexpectedError as e:
-            print_trouble(parser.prog, str(e), use_colors=colored_stderr)
+            print_trouble(prog, str(e), use_colors=colored_stderr)
             sys.stderr.write(e.formatted_traceback)
             retcode = ExitStatus.TROUBLE
             # stop at the first unexpected error,
