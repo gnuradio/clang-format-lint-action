@@ -19,7 +19,7 @@ inputs:
     default: 'c,h,C,H,cpp,hpp,cc,hh,c++,h++,cxx,hxx'
 runs:
   using: 'docker'
-  image: 'docker://gnuradio/clang-format-lint:0.5-2'
+  image: 'docker://gnuradio/clang-format-lint:0.5-3'
   args:
     - ${{ inputs.source }}
     - ${{ inputs.exclude }}
