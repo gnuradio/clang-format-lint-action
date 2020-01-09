@@ -52,11 +52,8 @@ def excludes_from_file(ignore_file):
     return excludes
 
 def list_files(files, recursive=False, extensions=None, exclude=None):
-    if extensions is None:
-        extensions = []
-    if exclude is None:
-        exclude = []
-
+    extensions = extensions or []
+    exclude = exclude or []
     out = []
     for file in files:
         if recursive and os.path.isdir(file):
@@ -68,8 +65,8 @@ def list_files(files, recursive=False, extensions=None, exclude=None):
                     # to avoid unnecessary directory listings.
                     dnames[:] = [
                         x for x in dnames
-                        if
-                        not fnmatch.fnmatch(os.path.join(dirpath, x), pattern)
+                        if not fnmatch.fnmatch(os.path.join(dirpath, x), pattern) \
+                                and not pattern in os.path.join(dirpath, x)
                     ]
                     fpaths = [
                         x for x in fpaths if not fnmatch.fnmatch(x, pattern)
@@ -262,6 +259,20 @@ def parse_args():
         ' from recursive search')
     return parser.parse_args(), parser.prog
 
+def config_signal_handling():
+    """
+    use default signal handling, like diff return SIGINT value on ^C
+    https://bugs.python.org/issue14229#msg156446
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    """
+    try:
+        signal.SIGPIPE
+    except AttributeError:
+        # compatibility, SIGPIPE does not exist on Windows
+        pass
+    else:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
 def get_color_mode(args):
     """
     Return a pair of bools: (colored_stdout, colored_stderr)
@@ -272,51 +283,54 @@ def get_color_mode(args):
         return sys.stdout.isatty(), sys.stderr.isatty()
     return False, False
 
-def main():
+def check_linter(args, prog, use_colors):
     """
-    Go, go, go!
+    Make sure clang-format is installed, exit otherwise
     """
-    # use default signal handling, like diff return SIGINT value on ^C
-    # https://bugs.python.org/issue14229#msg156446
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    try:
-        signal.SIGPIPE
-    except AttributeError:
-        # compatibility, SIGPIPE does not exist on Windows
-        pass
-    else:
-        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-
-    args, prog = parse_args()
-    colored_stdout, colored_stderr = get_color_mode(args)
-
     version_invocation = [args.clang_format_executable, str("--version")]
     try:
         subprocess.check_call(version_invocation, stdout=DEVNULL)
     except subprocess.CalledProcessError as e:
-        print_trouble(prog, str(e), use_colors=colored_stderr)
-        return ExitStatus.TROUBLE
+        print_trouble(prog, str(e), use_colors=use_colors)
+        exit(ExitStatus.TROUBLE)
     except OSError as e:
         print_trouble(
             prog,
             "Command '{}' failed to start: {}".format(
                 subprocess.list2cmdline(version_invocation), e
             ),
-            use_colors=colored_stderr,
+            use_colors=use_colors,
         )
-        return ExitStatus.TROUBLE
+        exit(ExitStatus.TROUBLE)
+
+def get_exclude_paths(args):
+    """
+    Return a list of excluded paths
+    """
+    excludes = excludes_from_file(DEFAULT_CLANG_FORMAT_IGNORE)
+    for exclude_list in args.exclude:
+        excludes.extend(exclude_list.split(","))
+    return excludes
+
+
+def main():
+    """
+    Go, go, go!
+    """
+    config_signal_handling()
+    args, prog = parse_args()
+    colored_stdout, colored_stderr = get_color_mode(args)
+    check_linter(args, prog, colored_stderr)
 
     retcode = ExitStatus.SUCCESS
 
-    excludes = excludes_from_file(DEFAULT_CLANG_FORMAT_IGNORE)
-    excludes.extend(args.exclude)
+    excludes = get_exclude_paths(args)
 
     files = list_files(
         args.files,
         recursive=args.recursive,
         exclude=excludes,
         extensions=args.extensions.split(','))
-
     if not files:
         return
 
@@ -364,7 +378,7 @@ def main():
             if retcode == ExitStatus.SUCCESS:
                 retcode = ExitStatus.DIFF
     if broken_files:
-        print("The following files had formatting issues:")
+        print("The following files have formatting issues:")
         for broken_file in broken_files:
             print("* {}".format(broken_file))
     return retcode
